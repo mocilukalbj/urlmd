@@ -6,7 +6,7 @@ use reqwest::{blocking::Client, header::{ACCEPT, CONTENT_TYPE, HeaderValue}};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use url::Url;
-use urlmd::{decode, html_to_markdown, is_html, native_markdown};
+use urlmd::{LinkMode, decode, html_to_markdown, is_html, native_markdown, rewrite_links};
 
 /// Fetch a URL as Markdown. Prefer native Markdown; otherwise extract HTML content.
 #[derive(Parser, Debug)]
@@ -39,6 +39,9 @@ struct Args {
     /// Omit YAML provenance front matter from the Markdown.
     #[arg(long)]
     no_metadata: bool,
+    /// Link destinations: keep, shorten same-origin URLs, or keep only labels.
+    #[arg(long, value_enum, default_value_t = LinkMode::Keep)]
+    links: LinkMode,
     /// Override the source charset, e.g. utf-8 or gbk.
     #[arg(long, value_name = "CHARSET")]
     encoding: Option<String>,
@@ -72,6 +75,7 @@ struct Metadata {
     source_sha256: String,
     format: String,
     selection: String,
+    links: &'static str,
     extractor: String,
     extraction_status: String,
     error: Option<String>,
@@ -173,6 +177,7 @@ fn run(args: Args) -> Result<()> {
         converted_at: None, content_type, encoding: String::new(),
         source_bytes: bytes.len(), source_sha256: format!("{:x}", Sha256::digest(&bytes)),
         format: "unprocessed".into(), selection: String::new(),
+        links: args.links.as_str(),
         extractor: concat!("urlmd/", env!("CARGO_PKG_VERSION")).into(),
         extraction_status: "downloaded".into(), error: None,
     };
@@ -183,17 +188,19 @@ fn run(args: Args) -> Result<()> {
     let converted = (|| -> Result<_> {
         let (text, encoding) = decode(&bytes, &metadata.content_type, args.encoding.as_deref())?;
         let mime = metadata.content_type.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
-        let native = !is_html(&text) && (matches!(mime.as_str(), "text/markdown" | "text/x-markdown")
-            || (mime == "text/plain" && final_url.as_ref().is_some_and(|u| u.path().ends_with(".md"))));
-        if force_html && native { bail!("The server returned native Markdown despite the HTML request; remove --html/--selector/--whole-page"); }
-        let extraction = if native { native_markdown(&text) }
+        let native = !is_html(&text) && matches!(mime.as_str(), "text/markdown" | "text/x-markdown" | "text/plain");
+        if force_html && native { bail!("The source returned Markdown or plain text despite the HTML request; remove --html/--selector/--whole-page"); }
+        let mut extraction = if native { native_markdown(&text) }
             else if matches!(mime.as_str(), "text/html" | "application/xhtml+xml" | "") || is_html(&text) {
                 html_to_markdown(&text, final_url.as_ref(), args.selector.as_deref(), args.whole_page)?
             } else { bail!("Unsupported Content-Type {:?}; expected HTML or Markdown", metadata.content_type); };
         if extraction.markdown.trim().is_empty() { bail!("Empty Markdown response"); }
-        Ok((extraction, encoding, native))
+        extraction.markdown = rewrite_links(&extraction.markdown, final_url.as_ref(), args.links);
+        let format = if native && mime == "text/plain" { "plain-text" }
+            else if native { "native-markdown" } else { "html" };
+        Ok((extraction, encoding, format))
     })();
-    let (extraction, encoding, native) = match converted {
+    let (extraction, encoding, format) = match converted {
         Ok(value) => value,
         Err(error) => {
             metadata.extraction_status = "failed".into();
@@ -204,17 +211,17 @@ fn run(args: Args) -> Result<()> {
     };
     metadata.title = extraction.title;
     metadata.encoding = encoding;
-    metadata.format = if native { "native-markdown" } else { "html" }.into();
+    metadata.format = format.into();
     metadata.selection = extraction.selection;
     metadata.converted_at = Some(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true));
     metadata.extraction_status = "converted".into();
     let output = if args.no_metadata { extraction.markdown }
         else {
             let quote = |s: &str| serde_json::to_string(s).unwrap();
-            format!("---\nsource: {}\nurl: {}\ntitle: {}\nfetched_at: {}\nconverted_at: {}\nformat: {}\nselection: {}\nextractor: {}\n---\n\n{}",
+            format!("---\nsource: {}\nurl: {}\ntitle: {}\nfetched_at: {}\nconverted_at: {}\nformat: {}\nselection: {}\nlinks: {}\nextractor: {}\n---\n\n{}",
                 quote(&metadata.source), quote(metadata.final_url.as_deref().unwrap_or_default()), quote(&metadata.title),
                 metadata.fetched_at.as_deref().map(quote).unwrap_or_else(|| "null".into()),
-                quote(metadata.converted_at.as_deref().unwrap_or_default()), quote(&metadata.format), quote(&metadata.selection), quote(&metadata.extractor), extraction.markdown)
+                quote(metadata.converted_at.as_deref().unwrap_or_default()), quote(&metadata.format), quote(&metadata.selection), quote(metadata.links), quote(&metadata.extractor), extraction.markdown)
         };
     if let Some(path) = &args.save_source {
         save_metadata(path, &metadata)?;

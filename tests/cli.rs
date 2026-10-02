@@ -264,6 +264,66 @@ fn sends_default_user_agent_and_explicit_override() {
 }
 
 #[test]
+fn plain_text_markdown_without_suffix_is_preserved_and_html_mode_rejects_it() {
+    let native = "---\ntitle: Quick Start\n---\n\n<Intro>\n\n中文文档 [Guide](/guide).\n\n</Intro>\n\n```html\n<meta charset='gbk'>\n```\n";
+    let server = HttpFixture::new(move |_, _| Response::text("text/plain", native));
+    let temp = TempDir::new();
+    let saved = temp.path("source.txt");
+    let output = run(&[&server.url("/learn"), "--save-source", path_arg(&saved), "--no-metadata"]);
+    assert_eq!(succeeded(&output), native);
+    let sidecar: serde_json::Value = serde_json::from_slice(&fs::read(temp.path("source.txt.meta.json")).unwrap()).unwrap();
+    assert_eq!(sidecar["content_type"], "text/plain");
+    assert_eq!(sidecar["format"], "plain-text");
+    for options in [vec!["--html"], vec!["--selector", "main"], vec!["--whole-page"]] {
+        let url = server.url("/learn");
+        let mut args = vec![url.as_str()];
+        args.extend(options);
+        let output = run(&args);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+    }
+}
+
+#[test]
+fn plain_text_html_is_converted_and_json_is_still_rejected() {
+    let server = HttpFixture::new(|path, _| match path {
+        "/html" => Response::text("text/plain", "<!doctype html><main><h1>Actual HTML</h1></main>"),
+        _ => Response::text("application/json", "{\"name\":\"not Markdown\"}"),
+    });
+    assert_eq!(succeeded(&run(&[&server.url("/html"), "--no-metadata"])), "# Actual HTML\n");
+    let output = run(&[&server.url("/json")]);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn link_modes_work_for_native_and_html_using_final_redirect_url() {
+    let server = HttpFixture::new(|path, _| match path {
+        "/start-native" => Response::redirect("/docs/native"),
+        "/docs/native" => Response::markdown("# Native\n\n[Next](/next) and [external](https://other.test/page).\n\n`[code](/leave)`\n"),
+        "/start-html" => Response::redirect("/docs/html"),
+        _ => Response::html("<main><h1>HTML</h1><a href='/next'>Next</a> and <a href='https://other.test/page'>external</a>.<pre><code>[code](/leave)</code></pre></main>"),
+    });
+    for path in ["/start-native", "/start-html"] {
+        let url = server.url(path);
+        let text = succeeded(&run(&[&url, "--links", "text", "--no-metadata"]));
+        assert!(text.contains("Next and external."), "{text}");
+        assert!(!text.contains("other.test"));
+        assert!(text.contains("[code](/leave)"));
+        let relative = succeeded(&run(&[&url, "--links", "relative", "--no-metadata"]));
+        assert!(relative.contains("[Next](/next)") || relative.contains("[Next](</next>)"), "{relative}");
+        assert!(!relative.contains(&server.base_url));
+        assert!(relative.contains("https://other.test/page"));
+    }
+    let html = "<main><a href='next'>Next</a><img src='diagram.png' alt='Diagram'></main>";
+    let output = run_with_stdin(&["--input", "-", "--base-url", "https://example.com/docs/", "--links", "text", "--no-metadata"], html.as_bytes());
+    let text = succeeded(&output);
+    assert!(text.contains("Next"));
+    assert!(!text.contains("/docs/next"));
+    assert!(text.contains("![Diagram](https://example.com/docs/diagram.png)"));
+}
+
+#[test]
 fn invalid_user_agent_fails_before_request_without_overwriting_output() {
     let server = HttpFixture::new(|_, _| Response::markdown("# Should not be fetched\n"));
     let temp = TempDir::new();

@@ -51,13 +51,13 @@ urlmd https://developers.openai.com/api/docs -o docs.md
 urlmd https://example.com/guide > guide.md
 ```
 
-默认发送 `Accept: text/markdown`。站点返回原生 Markdown 时直接保存；返回 HTML 时选择正文、清理脚本与隐藏元素，再转换为 Markdown。下载完整响应后处理，不按 HTML 字符前缀截断。
+默认发送 `Accept: text/markdown`。站点返回原生 Markdown 时直接保存；非 HTML 的 `text/plain` 也按 Markdown 兼容文本保留，不要求网址以 `.md` 结尾（例如 React 文档）。来源记录保留实际 Content-Type，并将这类响应的 format 标为 `plain-text`。返回 HTML 时选择正文、清理脚本与隐藏元素，再转换为 Markdown。下载完整响应后处理，不按 HTML 字符前缀截断。
 
-默认 User-Agent 为 `urlmd/0.1.1`。可以用 `--user-agent` 按站点要求覆盖；空值、换行及非法 HTTP 头值会在请求前报错。Wikimedia 要求工具提供描述性 UA 和联系方式，并明确不建议机器人复制浏览器 UA，详见 [官方 User-Agent 政策](https://foundation.wikimedia.org/wiki/Policy:User-Agent_policy)。访问这类站点时，将下面的联系方式替换为你自己的真实联系地址：
+默认 User-Agent 为 `urlmd/0.1.2`。可以用 `--user-agent` 按站点要求覆盖；空值、换行及非法 HTTP 头值会在请求前报错。Wikimedia 要求工具提供描述性 UA 和联系方式，并明确不建议机器人复制浏览器 UA，详见 [官方 User-Agent 政策](https://foundation.wikimedia.org/wiki/Policy:User-Agent_policy)。访问这类站点时，将下面的联系方式替换为你自己的真实联系地址：
 
 ```sh
 urlmd https://en.wikipedia.org/wiki/Markdown \
-  --user-agent 'urlmd/0.1.1 (https://your-domain.example/contact)' -o wikipedia.md
+  --user-agent 'urlmd/0.1.2 (https://your-domain.example/contact)' -o wikipedia.md
 ```
 
 对于需要浏览器 UA 的其他站点，也可以传入相应 UA；403 还可能来自访问权限、频率限制或站点验证，覆盖 UA 并不能保证解决。
@@ -68,6 +68,26 @@ OpenAI 文档站支持这种内容协商，也提供追加 `.md` 的地址。本
 urlmd https://developers.openai.com/api/docs --html -o docs-homepage.md
 urlmd https://developers.openai.com/api/docs/guides/tools-web-search -o web-search.md
 ```
+
+Agent 只需要阅读正文时，可以省略超链接目标和来源 front matter：
+
+```sh
+urlmd https://react.dev/learn --links text --no-metadata
+```
+
+需要继续访问文档链接时，可以缩短同站 URL，并保留来源 URL 供解析：
+
+```sh
+urlmd https://doc.rust-lang.org/std/vec/struct.Vec.html --links relative -o vec.md
+```
+
+| 链接模式 | 行为 |
+|---|---|
+| `--links keep`（默认） | 保留超链接；HTML 中解析成绝对 URL，原生 Markdown 保留原始写法 |
+| `--links relative` | 同协议、主机和端口的绝对 URL 缩短为 `/path?query#fragment`；同页锚点缩短为 `#fragment`；外站及已有相对链接保持原样 |
+| `--links text` | 超链接保留标签文字和格式，移除目标及标题；删除不再使用的引用定义，共享给图片的定义保留 |
+
+链接模式同时适用于 HTML 转换结果和原生 Markdown，来源记录包含所选模式。图片、代码块、行内代码和正文中直接写出的 URL 保留；原生 Markdown 内嵌 HTML/JSX 的属性保持原样。`relative` 模式离线使用时应提供 `--base-url`，否则保留原链接。使用 `--no-metadata` 时，调用方需要自行保存来源 URL。
 
 保存原始响应和来源信息，方便之后重新提取：
 
@@ -103,14 +123,17 @@ curl -fsSL -H 'Accept: text/html' https://developers.openai.com/api/docs |
 | `--selector 'CSS'` | 指定正文元素；多个匹配会合并；无匹配或非法 CSS 报错；在线输入会请求 HTML |
 | `--whole-page` | 转换整个 body，保留导航；在线输入会请求 HTML |
 | `--no-metadata` | 不在 Markdown 开头添加 YAML 来源信息 |
+| `--links keep\|relative\|text` | 保留链接、缩短同站 URL，或只保留链接文字；默认 keep |
 | `--encoding gbk` | 显式指定字符集；默认使用 BOM、HTTP charset、早期 HTML meta 或 UTF-8 |
 | `--max-bytes 20971520` | 默认最多读取 20 MiB 响应正文，超限报错，不生成截断结果 |
 | `--timeout 30` | 网络超时秒数 |
-| `--user-agent 'UA'` | 覆盖 URL 请求的 User-Agent，默认为 `urlmd/0.1.1` |
+| `--user-agent 'UA'` | 覆盖 URL 请求的 User-Agent，默认为 `urlmd/0.1.2` |
 | `--input -` | 从 stdin 读取 HTML |
 | `--help` | 查看全部用法 |
 
-HTML 模式会解析相对链接与图片地址，支持 HTML `base`，采用重定向后的最终 URL 为基准。优先选择常见文档正文容器、article、main，最后回退 body。清理隐藏属性、aria-hidden 和内联隐藏样式；仅凭 CSS class 名不会删除内容，因此会保留某些站点备用语言 Tab 的示例。代码语言支持 `language-*` 与 `data-language`。原生 Markdown 模式保留站点提供的排版与链接。
+HTML 模式会解析相对链接与图片地址，支持 HTML `base`，采用重定向后的最终 URL 为基准。优先选择常见文档正文容器、article、main，最后回退 body。清理隐藏属性、aria-hidden 和内联隐藏样式；仅凭 `hidden` 这个 CSS class 名不会删除内容，因此会保留某些站点备用语言 Tab 的示例。
+
+Python/rustdoc 的装饰性 `¶/§` 自锚点、rustdoc 的复制路径按钮、展开提示和 playground 运行按钮会按 DOM 结构清除，标题和折叠区域正文保留。MDN 的语言标签会写入代码围栏，代码语言支持 `language-*`、`data-language`、`brush:` 和 rustdoc 的 `rust` 类。裸 `<pre>` 也会保留为代码块。原生 Markdown 默认保留站点提供的排版与链接，指定链接模式时仅修改解析到的 Markdown 超链接。
 
 这是单页转换器。不会递归抓取整站，也不会执行网页 JavaScript。CSS 正文规则不可能适合所有网站，特殊站点可以指定 `--selector`；只有浏览器运行后才出现的正文需要另行获取渲染后的 HTML，再用 `--input` 转换。图片在 Markdown 中保留引用，不进行 OCR。
 
@@ -122,9 +145,11 @@ cargo test --locked
 # 构建后程序位于 target/release/urlmd
 ```
 
-本次使用 Rust 1.98.1 验证。转换层使用 [htmd](https://github.com/letmutex/htmd)，DOM 操作使用 [dom_query](https://github.com/niklak/dom_query)，HTTP 使用 [reqwest](https://github.com/seanmonstar/reqwest)。完整依赖版本见 Cargo.lock。
+本次使用 Rust 1.98.1 验证。转换层使用 [htmd](https://github.com/letmutex/htmd)，DOM 操作使用 [dom_query](https://github.com/niklak/dom_query)，链接改写使用 [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark) 的源文本位置，HTTP 使用 [reqwest](https://github.com/seanmonstar/reqwest)。完整依赖版本见 Cargo.lock。
 
-验证结果：4 项字符编码/代码格式测试、15 项 CLI 集成测试全部通过。集成测试覆盖长脚本前置、HTML 正文/表格、原生 Markdown、重定向与链接、下载超限、HTTP 错误、离线输入、CSS 选择器、留档与输出路径冲突，以及默认/自定义 UA、非法 UA 拒绝、stdin 管道的代码格式与相对链接、stdin 超限和空输入。2026-10-01 对 OpenAI 文档首页的 HTML 转换检查保留了 8 个代码块的原始文本、换行、空行和缩进；正文链接经抽查全部保留。
+验证结果：10 项单元测试、18 项 CLI 集成测试全部通过。覆盖字符编码、代码格式、装饰控件清理、引用式链接/图片共享引用、长脚本前置、HTML 正文/表格、原生 Markdown、text/plain 兼容、重定向与链接模式、下载超限、HTTP 错误、离线输入、CSS 选择器、留档与输出路径冲突、默认/自定义 UA、非法 UA 拒绝，以及 stdin 管道与异常输入。
+
+以同一份网页响应比较 0.1.1 默认输出和 0.1.2 `--links text` 输出（均不含 front matter），Python json 文档的字符数减少 30.8%，Rust Vec 文档减少 59.6%，MDN Content-Type 文档减少 43.7%。这是字符数比较，不是 token 计数。三种链接模式的代码块文本一致，旧输出已有的代码块全部保留。
 
 ## 卸载
 

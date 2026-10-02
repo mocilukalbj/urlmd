@@ -4,6 +4,9 @@ use encoding_rs::Encoding;
 use htmd::{HtmlToMarkdown, options::{BulletListMarker, Options}};
 use url::Url;
 
+mod links;
+pub use links::{LinkMode, rewrite_links};
+
 pub struct Extraction {
     pub markdown: String,
     pub title: String,
@@ -32,7 +35,8 @@ pub fn decode(bytes: &[u8], content_type: &str, override_encoding: Option<&str>)
             label = charset_parameter(content_type);
         }
     }
-    if label.is_none() && !content_type.to_ascii_lowercase().starts_with("text/markdown") {
+    let mime = content_type.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
+    if label.is_none() && matches!(mime.as_str(), "text/html" | "application/xhtml+xml" | "") {
         // Encoding declarations live near the start; the actual conversion uses the whole response.
         let prefix = String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]);
         let doc = Document::from(prefix.as_ref());
@@ -78,6 +82,42 @@ fn collapse_space(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn valid_language(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '#'))
+}
+
+fn class_language(classes: &str) -> Option<String> {
+    let words: Vec<_> = classes.split_whitespace().collect();
+    words.iter().find_map(|word| word.strip_prefix("language-").map(str::to_owned))
+        .or_else(|| words.windows(2).find(|pair| pair[0] == "brush:").map(|pair| pair[1].to_owned()))
+        .or_else(|| words.contains(&"rust").then(|| "rust".to_owned()))
+}
+
+fn clean_document_controls(doc: &Document) {
+    // Match known UI structures, not these words wherever they appear in prose/code.
+    doc.select("button#copy-path,rustdoc-toolbar,a.test-arrow[href^='https://play.rust-lang.org/']").remove();
+    for anchor in doc.select("a.headerlink,a.doc-anchor,a.anchor").iter() {
+        if matches!(anchor.text().trim(), "¶" | "§")
+            && anchor.attr("href").is_some_and(|href| href.starts_with('#')) {
+            anchor.remove();
+        }
+    }
+    for summary in doc.select("details.top-doc > summary.hideme").iter() {
+        if collapse_space(&summary.text()) == "Expand description" { summary.remove(); }
+    }
+    for example in doc.select(".code-example").iter() {
+        let label = example.select_single(".example-header .language-name");
+        let language = label.text();
+        let language = language.trim();
+        let pre = example.select_single("pre");
+        if pre.exists() && valid_language(language) {
+            if pre.attr("data-language").is_none() { pre.set_attr("data-language", language); }
+            label.remove();
+        }
+        example.select(".example-header button").remove();
+    }
+}
+
 pub fn html_to_markdown(html: &str, base_url: Option<&Url>, selector: Option<&str>, whole_page: bool) -> Result<Extraction> {
     let doc = Document::from(html);
     let title = collapse_space(&doc.select_single("title").text());
@@ -92,21 +132,23 @@ pub fn html_to_markdown(html: &str, base_url: Option<&Url>, selector: Option<&st
     if selector.is_none() && !whole_page {
         doc.select("nav,footer,[role='navigation']").remove();
     }
+    clean_document_controls(&doc);
 
     // Normalize common code-language attributes before the Markdown serializer sees them.
-    for code in doc.select("pre code").iter() {
-        // Highlighting spans can normalize whitespace in the serializer. Flatten them while
-        // preserving raw textContent, including blank lines and indentation.
-        let code_text = code.text();
+    for pre in doc.select("pre").iter() {
+        let original_code = pre.select_single("code");
+        let language = original_code.attr("data-language").or_else(|| pre.attr("data-language"))
+            .map(|value| value.trim().to_owned())
+            .or_else(|| original_code.attr("class").and_then(|value| class_language(&value)))
+            .or_else(|| pre.attr("class").and_then(|value| class_language(&value)));
+        // Flatten highlighting without normalizing whitespace. Wrap bare <pre> contents too,
+        // otherwise the serializer can emit prose instead of a fenced code block.
+        let code_text = pre.text();
+        pre.set_html("<code></code>");
+        let code = pre.select_single("code");
         code.set_text(&code_text);
-        if let Some(language) = code.attr("data-language").or_else(|| code.parent().attr("data-language")) {
-            let language = language.trim();
-            if !language.is_empty() && language.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '#')) {
-                let original = code.attr("class").unwrap_or_default();
-                let mut classes = original.split_whitespace().filter(|c| !c.starts_with("language-")).map(str::to_owned).collect::<Vec<_>>();
-                classes.push(format!("language-{language}"));
-                code.set_attr("class", &classes.join(" "));
-            }
+        if let Some(language) = language.filter(|value| valid_language(value)) {
+            code.set_attr("class", &format!("language-{language}"));
         }
     }
     let effective_base = doc.base_uri().and_then(|value| {
@@ -197,9 +239,11 @@ mod tests {
     #[test]
     fn markdown_code_examples_do_not_change_charset() {
         let text = "# 中文文档\n\n```html\n<meta charset='gbk'>\n```\n";
-        let (decoded, encoding) = decode(text.as_bytes(), "text/markdown", None).unwrap();
-        assert_eq!(decoded, text);
-        assert_eq!(encoding, "UTF-8");
+        for mime in ["text/markdown", "text/x-markdown", "text/plain"] {
+            let (decoded, encoding) = decode(text.as_bytes(), mime, None).unwrap();
+            assert_eq!(decoded, text);
+            assert_eq!(encoding, "UTF-8");
+        }
     }
 
     #[test]
@@ -208,5 +252,45 @@ mod tests {
         let md = html_to_markdown(html, None, None, false).unwrap().markdown;
         assert!(md.contains("```python\nfrom openai import OpenAI\n\nif True:\n    client = OpenAI()\n```"), "{md}");
         assert!(!md.contains("1\n2\n3"));
+    }
+
+    #[test]
+    fn removes_document_controls_but_preserves_heading_and_details_contents() {
+        let html = "<main><h1 id='intro'>Guide<a class='headerlink' href='#intro'>¶</a><button id='copy-path'>Copy item path</button></h1>\
+            <h2><a class='doc-anchor' href='#examples'>§</a>Examples</h2>\
+            <h2>Implementations<a class='anchor' href='#impls'>§</a></h2>\
+            <h2><a class='heading-anchor' href='#syntax'>Syntax</a></h2>\
+            <details class='top-doc'><summary class='hideme'><span>Expand description</span></summary><p>Keep expanded body.</p></details>\
+            <details><summary>Meaningful explanation</summary><p>Keep normal details.</p></details>\
+            <a class='test-arrow' href='https://play.rust-lang.org/?code=long'><svg></svg></a>\
+            <a href='/image'><img src='/diagram.png' alt='Diagram'></a>\
+            <p>Explain Copy item path and ¶ in prose.</p><pre><code>Expand description\n§ http</code></pre></main>";
+        let base = Url::parse("https://example.com/guide").unwrap();
+        let md = html_to_markdown(html, Some(&base), None, false).unwrap().markdown;
+        assert!(md.contains("# Guide\n"), "{md}");
+        assert!(md.contains("## Examples\n"));
+        assert!(md.contains("## Implementations\n"));
+        assert!(md.contains("[Syntax](https://example.com/guide#syntax)"));
+        assert!(md.contains("Keep expanded body."));
+        assert!(md.contains("Meaningful explanation"));
+        assert!(md.contains("Keep normal details."));
+        assert!(!md.contains("play.rust-lang.org"));
+        assert!(md.contains("[![Diagram](https://example.com/diagram.png)](https://example.com/image)"));
+        assert!(md.contains("Explain Copy item path and ¶ in prose."));
+        assert!(md.contains("```\nExpand description\n§ http\n```"));
+    }
+
+    #[test]
+    fn mdn_language_labels_become_fence_languages_and_bare_pre_is_preserved() {
+        let html = "<main><p>The protocol is http.</p><div class='code-example'><div class='example-header'><span class='language-name'>http</span></div>\
+            <pre class='brush: http notranslate'><code>GET / HTTP/1.1\n\nHost: example.com\n</code></pre></div>\
+            <pre class='brush: plain notranslate'>Content-Type: &lt;media-type&gt;\n</pre>\
+            <pre class='rust rust-example-rendered'><code>fn main() {}\n</code></pre></main>";
+        let md = html_to_markdown(html, None, None, false).unwrap().markdown;
+        assert!(md.contains("```http\nGET / HTTP/1.1\n\nHost: example.com\n```"), "{md}");
+        assert!(!md.contains("\nhttp\n"));
+        assert!(md.contains("```plain\nContent-Type: <media-type>\n```"));
+        assert!(md.contains("```rust\nfn main() {}\n```"));
+        assert!(md.contains("The protocol is http."));
     }
 }
