@@ -1,6 +1,6 @@
 [package]
 name = "urlmd"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "Fetch a web page as Markdown, preferring native Markdown when available"
 license = "MIT"

@@ -1,0 +1,185 @@
+[
+  {
+    "name": "mdn-content-type",
+    "url": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Type",
+    "mode": "html",
+    "expected": [
+      "Header type",
+      "Forbidden request header",
+      "Representation header",
+      "CORS-safelisted request header"
+    ]
+  },
+  {
+    "name": "mdn-set-cookie",
+    "url": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie",
+    "mode": "html",
+    "expected": [
+      "Header type",
+      "Forbidden response header",
+      "Response header"
+    ]
+  },
+  {
+    "name": "mdn-display",
+    "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/display",
+    "mode": "html",
+    "expected": [
+      "Syntax",
+      "Examples"
+    ]
+  },
+  {
+    "name": "python-json",
+    "url": "https://docs.python.org/3/library/json.html",
+    "mode": "html",
+    "expected": [
+      "Basic Usage",
+      "JSON"
+    ]
+  },
+  {
+    "name": "python-argparse",
+    "url": "https://docs.python.org/3/library/argparse.html",
+    "mode": "html",
+    "expected": [
+      "ArgumentParser",
+      "parse_args"
+    ]
+  },
+  {
+    "name": "rust-vec",
+    "url": "https://doc.rust-lang.org/std/vec/struct.Vec.html",
+    "mode": "html",
+    "expected": [
+      "Struct Vec",
+      "Implementations"
+    ]
+  },
+  {
+    "name": "rust-option",
+    "url": "https://doc.rust-lang.org/std/option/enum.Option.html",
+    "mode": "html",
+    "expected": [
+      "Enum Option",
+      "Variants"
+    ]
+  },
+  {
+    "name": "docs-rs-serde",
+    "url": "https://docs.rs/serde/latest/serde/trait.Serialize.html",
+    "mode": "html",
+    "expected": [
+      "Serialize",
+      "Required Methods"
+    ]
+  },
+  {
+    "name": "react-native",
+    "url": "https://react.dev/learn",
+    "mode": "auto",
+    "expected": [
+      "Quick Start",
+      "useState"
+    ]
+  },
+  {
+    "name": "react-html",
+    "url": "https://react.dev/learn",
+    "mode": "html",
+    "expected": [
+      "Quick Start",
+      "useState"
+    ]
+  },
+  {
+    "name": "typescript",
+    "url": "https://www.typescriptlang.org/docs/handbook/2/everyday-types.html",
+    "mode": "html",
+    "expected": [
+      "Everyday Types",
+      "string"
+    ]
+  },
+  {
+    "name": "vue",
+    "url": "https://vuejs.org/guide/essentials/reactivity-fundamentals.html",
+    "mode": "html",
+    "expected": [
+      "Reactivity Fundamentals",
+      "ref"
+    ]
+  },
+  {
+    "name": "go-http",
+    "url": "https://pkg.go.dev/net/http",
+    "mode": "html",
+    "expected": [
+      "Client",
+      "Handler"
+    ]
+  },
+  {
+    "name": "fastapi",
+    "url": "https://fastapi.tiangolo.com/tutorial/body/",
+    "mode": "html",
+    "expected": [
+      "Request Body",
+      "BaseModel"
+    ]
+  },
+  {
+    "name": "django",
+    "url": "https://docs.djangoproject.com/en/5.2/ref/models/fields/",
+    "mode": "html",
+    "expected": [
+      "Field types",
+      "CharField"
+    ]
+  },
+  {
+    "name": "kubernetes",
+    "url": "https://kubernetes.io/docs/concepts/services-networking/service/",
+    "mode": "html",
+    "expected": [
+      "Service",
+      "ClusterIP"
+    ]
+  },
+  {
+    "name": "postgresql",
+    "url": "https://www.postgresql.org/docs/current/datatype-numeric.html",
+    "mode": "html",
+    "expected": [
+      "Numeric Types",
+      "smallint",
+      "bigint"
+    ]
+  },
+  {
+    "name": "sqlite",
+    "url": "https://www.sqlite.org/lang_createtable.html",
+    "mode": "html",
+    "expected": [
+      "CREATE TABLE",
+      "PRIMARY KEY"
+    ]
+  },
+  {
+    "name": "wikipedia",
+    "url": "https://en.wikipedia.org/wiki/HTTP",
+    "mode": "html",
+    "expected": [
+      "Hypertext Transfer Protocol",
+      "HTTP"
+    ]
+  },
+  {
+    "name": "openai",
+    "url": "https://developers.openai.com/api/docs/guides/tools-web-search",
+    "mode": "auto",
+    "expected": [
+      "Web search"
+    ]
+  }
+]

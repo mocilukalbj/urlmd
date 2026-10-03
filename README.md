@@ -53,11 +53,11 @@ urlmd https://example.com/guide > guide.md
 
 默认发送 `Accept: text/markdown`。站点返回原生 Markdown 时直接保存；非 HTML 的 `text/plain` 也按 Markdown 兼容文本保留，不要求网址以 `.md` 结尾（例如 React 文档）。来源记录保留实际 Content-Type，并将这类响应的 format 标为 `plain-text`。返回 HTML 时选择正文、清理脚本与隐藏元素，再转换为 Markdown。下载完整响应后处理，不按 HTML 字符前缀截断。
 
-默认 User-Agent 为 `urlmd/0.1.2`。可以用 `--user-agent` 按站点要求覆盖；空值、换行及非法 HTTP 头值会在请求前报错。Wikimedia 要求工具提供描述性 UA 和联系方式，并明确不建议机器人复制浏览器 UA，详见 [官方 User-Agent 政策](https://foundation.wikimedia.org/wiki/Policy:User-Agent_policy)。访问这类站点时，将下面的联系方式替换为你自己的真实联系地址：
+默认 User-Agent 为 `urlmd/0.1.3`。可以用 `--user-agent` 按站点要求覆盖；空值、换行及非法 HTTP 头值会在请求前报错。Wikimedia 要求工具提供描述性 UA 和联系方式，并明确不建议机器人复制浏览器 UA，详见 [官方 User-Agent 政策](https://foundation.wikimedia.org/wiki/Policy:User-Agent_policy)。访问这类站点时，将下面的联系方式替换为你自己的真实联系地址：
 
 ```sh
 urlmd https://en.wikipedia.org/wiki/Markdown \
-  --user-agent 'urlmd/0.1.2 (https://your-domain.example/contact)' -o wikipedia.md
+  --user-agent 'urlmd/0.1.3 (https://your-domain.example/contact)' -o wikipedia.md
 ```
 
 对于需要浏览器 UA 的其他站点，也可以传入相应 UA；403 还可能来自访问权限、频率限制或站点验证，覆盖 UA 并不能保证解决。
@@ -127,13 +127,32 @@ curl -fsSL -H 'Accept: text/html' https://developers.openai.com/api/docs |
 | `--encoding gbk` | 显式指定字符集；默认使用 BOM、HTTP charset、早期 HTML meta 或 UTF-8 |
 | `--max-bytes 20971520` | 默认最多读取 20 MiB 响应正文，超限报错，不生成截断结果 |
 | `--timeout 30` | 网络超时秒数 |
-| `--user-agent 'UA'` | 覆盖 URL 请求的 User-Agent，默认为 `urlmd/0.1.2` |
+| `--user-agent 'UA'` | 覆盖 URL 请求的 User-Agent，默认为 `urlmd/0.1.3` |
 | `--input -` | 从 stdin 读取 HTML |
 | `--help` | 查看全部用法 |
 
 HTML 模式会解析相对链接与图片地址，支持 HTML `base`，采用重定向后的最终 URL 为基准。优先选择常见文档正文容器、article、main，最后回退 body。清理隐藏属性、aria-hidden 和内联隐藏样式；仅凭 `hidden` 这个 CSS class 名不会删除内容，因此会保留某些站点备用语言 Tab 的示例。
 
-Python/rustdoc 的装饰性 `¶/§` 自锚点、rustdoc 的复制路径按钮、展开提示和 playground 运行按钮会按 DOM 结构清除，标题和折叠区域正文保留。MDN 的语言标签会写入代码围栏，代码语言支持 `language-*`、`data-language`、`brush:` 和 rustdoc 的 `rust` 类。裸 `<pre>` 也会保留为代码块。原生 Markdown 默认保留站点提供的排版与链接，指定链接模式时仅修改解析到的 Markdown 超链接。
+Python/rustdoc 的装饰性 `¶/§` 自锚点、rustdoc 的复制路径按钮、展开提示和 playground 运行按钮会按 DOM 结构清除，标题和折叠区域正文保留。rustdoc 标题下的 trait 徽章及 MDN Baseline/调查控件也会清除，正文中的 trait 实现和兼容性说明保留。MDN 的语言标签会写入代码围栏，代码语言支持 `language-*`、`data-language`、`brush:` 和 rustdoc 的 `rust` 类。裸 `<pre>`、`<code><pre>` 嵌套和代码内的 `<br>` 换行也会保留。TypeScript/Twoslash 的 `div.line` 会恢复为逐行代码，诊断信息放在代码块后，语言标签和 Try 控件不混入代码。原生 Markdown 默认保留站点提供的排版与链接，指定链接模式时仅修改解析到的 Markdown 超链接。
+
+普通表格按原始 `th`/`td` 顺序转换，不再把行头误当作列头而丢失内容。没有明确列头时添加空表头，保留第一行数据；支持混合单元格、caption、多个 tbody、tfoot 和空单元格。包含合并单元格、多行表头、嵌套表格或代码块/列表的复杂表格，转换为逐行、逐单元格列表，并标注 `rowspan`/`colspan`，保留内容顺序；不模拟合并后的视觉网格。
+
+例如：
+
+```html
+<table><tr><th>K</th><td>V1</td></tr><tr><th>K2</th><td>V2</td></tr></table>
+```
+
+会得到：
+
+```markdown
+|  |  |
+| --- | --- |
+| K | V1 |
+| K2 | V2 |
+```
+
+默认正文选择还覆盖 TypeScript 手册、Wikipedia、PostgreSQL 和 SQLite 的常见内容容器。`--selector`/`--whole-page` 可覆盖默认范围。SVG/canvas 图形和纯浏览器渲染内容不会转成文本；例如 SQLite 的 SVG 语法图仍需查看原页。
 
 这是单页转换器。不会递归抓取整站，也不会执行网页 JavaScript。CSS 正文规则不可能适合所有网站，特殊站点可以指定 `--selector`；只有浏览器运行后才出现的正文需要另行获取渲染后的 HTML，再用 `--input` 转换。图片在 Markdown 中保留引用，不进行 OCR。
 
@@ -147,9 +166,23 @@ cargo test --locked
 
 本次使用 Rust 1.98.1 验证。转换层使用 [htmd](https://github.com/letmutex/htmd)，DOM 操作使用 [dom_query](https://github.com/niklak/dom_query)，链接改写使用 [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark) 的源文本位置，HTTP 使用 [reqwest](https://github.com/seanmonstar/reqwest)。完整依赖版本见 Cargo.lock。
 
-验证结果：10 项单元测试、18 项 CLI 集成测试全部通过。覆盖字符编码、代码格式、装饰控件清理、引用式链接/图片共享引用、长脚本前置、HTML 正文/表格、原生 Markdown、text/plain 兼容、重定向与链接模式、下载超限、HTTP 错误、离线输入、CSS 选择器、留档与输出路径冲突、默认/自定义 UA、非法 UA 拒绝，以及 stdin 管道与异常输入。
+验证结果（0.1.3）：40 项自动测试通过（13 项单元测试、18 项 CLI 集成测试、9 项表格回归），另有 1 项需要本地网页快照的可选结构检查。覆盖编码、代码缩进/空行、控件清理、原生 Markdown/text/plain、三种链接模式、引用与图片、重定向、HTTP 错误、下载限制、stdin、CSS 选择器和留档冲突。
 
-以同一份网页响应比较 0.1.1 默认输出和 0.1.2 `--links text` 输出（均不含 front matter），Python json 文档的字符数减少 30.8%，Rust Vec 文档减少 59.6%，MDN Content-Type 文档减少 43.7%。这是字符数比较，不是 token 计数。三种链接模式的代码块文本一致，旧输出已有的代码块全部保留。
+2026-10-03 实测 15 个文档域名、20 个场景、60 份链接模式输出：MDN、Python、Rust、docs.rs、React（原生与 HTML）、TypeScript、Vue、Go、FastAPI、Django、Kubernetes、PostgreSQL、SQLite、Wikipedia、OpenAI。检查正文关键词、270 个非空表格单元格的文本，以及 998 个代码块在三种链接模式下的一致性。快照比较使用 0.1.2；除 TypeScript 代码排版修复外，原有代码块内容保留，18 个代码块恢复了 `<br>` 对应的换行。TypeScript 单独对照 HTML 中的逐行代码核验。字符数不是 token 数；这些检查也不代表所有页面都能完整转换。
+
+逐页结果、复现范围和耗时见 [验证报告](docs/verification-0.1.3.md)。
+
+可选在线回归使用 Python 3 标准库驱动已编译 CLI（程序运行本身仍无需 Python）：
+
+```sh
+python3 scripts/check_sites.py --binary target/release/urlmd --out target/site-audit
+URLMD_SITE_SNAPSHOTS="$PWD/target/site-audit" \
+  cargo test --test site_snapshots -- --ignored --nocapture
+# 重新检查同一批原始响应，不重复抓取：
+python3 scripts/check_sites.py --binary target/release/urlmd --out target/site-audit --cached
+```
+
+站点列表位于 `scripts/sites.json`。报告和原始网页只保存在指定目录；抓取失败、转换失败或关键词缺失均返回非零状态。站点内容会变化，测试断言也需要根据真实页面维护。可用 `--baseline /path/to/older/urlmd` 增加旧版代码块对照。
 
 ## 卸载
 

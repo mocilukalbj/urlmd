@@ -1,10 +1,10 @@
 use anyhow::{Context, Result, bail};
 use dom_query::{Document, Matcher};
 use encoding_rs::Encoding;
-use htmd::{HtmlToMarkdown, options::{BulletListMarker, Options}};
 use url::Url;
 
 mod links;
+mod tables;
 pub use links::{LinkMode, rewrite_links};
 
 pub struct Extraction {
@@ -95,11 +95,17 @@ fn class_language(classes: &str) -> Option<String> {
 
 fn clean_document_controls(doc: &Document) {
     // Match known UI structures, not these words wherever they appear in prose/code.
-    doc.select("button#copy-path,rustdoc-toolbar,a.test-arrow[href^='https://play.rust-lang.org/']").remove();
-    for anchor in doc.select("a.headerlink,a.doc-anchor,a.anchor").iter() {
-        if matches!(anchor.text().trim(), "¶" | "§")
+    doc.select("button#copy-path,rustdoc-toolbar,.notable-trait-badge-container,a.test-arrow[href^='https://play.rust-lang.org/'],details.baseline-indicator,mdn-survey").remove();
+    for anchor in doc.select("a.headerlink,a.doc-anchor,a.anchor,a.header-anchor,h1 a,h2 a,h3 a,h4 a,h5 a,h6 a").iter() {
+        if matches!(anchor.text().trim(), "¶" | "§" | "#" | "\u{200b}" | "")
+            && !anchor.select("img").exists()
             && anchor.attr("href").is_some_and(|href| href.starts_with('#')) {
             anchor.remove();
+        }
+    }
+    for button in doc.select("button").iter() {
+        if matches!(collapse_space(&button.text()).as_str(), "Copy pageCopy" | "Copy page") {
+            button.remove();
         }
     }
     for summary in doc.select("details.top-doc > summary.hideme").iter() {
@@ -130,20 +136,39 @@ pub fn html_to_markdown(html: &str, base_url: Option<&Url>, selector: Option<&st
         }
     }
     if selector.is_none() && !whole_page {
-        doc.select("nav,footer,[role='navigation']").remove();
+        doc.select("nav,footer,[role='navigation'],#docContent > .navheader,#docContent > .navfooter").remove();
     }
     clean_document_controls(&doc);
 
+    // Some authored documentation nests <pre> inside <code>. Do not serialize the
+    // resulting fenced block as another inline code span.
+    for code in doc.select("code").iter() {
+        if code.select("pre").exists() { code.rename("div"); }
+    }
     // Normalize common code-language attributes before the Markdown serializer sees them.
     for pre in doc.select("pre").iter() {
+        for br in pre.select("br").iter() {
+            br.before_html("\n");
+            br.remove();
+        }
         let original_code = pre.select_single("code");
+        let lines = original_code.children().filter("div.line");
+        // Twoslash uses block elements for lines, with no literal newline between them.
+        // Keep diagnostics as prose outside the code rather than mixing UI into its text.
+        let code_text = if lines.exists() {
+            for diagnostic in original_code.select(".error").iter().rev() {
+                pre.after_html(format!("<blockquote>{}</blockquote>", diagnostic.inner_html()));
+            }
+            let label = pre.select_single(".language-id").text();
+            if valid_language(label.trim()) { pre.set_attr("data-language", label.trim()); }
+            lines.iter().map(|line| line.text().to_string()).collect::<Vec<_>>().join("\n")
+        } else { pre.text().to_string() };
         let language = original_code.attr("data-language").or_else(|| pre.attr("data-language"))
             .map(|value| value.trim().to_owned())
             .or_else(|| original_code.attr("class").and_then(|value| class_language(&value)))
             .or_else(|| pre.attr("class").and_then(|value| class_language(&value)));
         // Flatten highlighting without normalizing whitespace. Wrap bare <pre> contents too,
         // otherwise the serializer can emit prose instead of a fenced code block.
-        let code_text = pre.text();
         pre.set_html("<code></code>");
         let code = pre.select_single("code");
         code.set_text(&code_text);
@@ -184,21 +209,21 @@ pub fn html_to_markdown(html: &str, base_url: Option<&Url>, selector: Option<&st
         (doc.select_single("body").inner_html().to_string(), "body (whole page)".into())
     } else {
         let mut selected = None;
-        for candidate in ["article.markdown-body", ".theme-doc-markdown", ".article-body", "main article", "article", "main", "[role='main']", "body"] {
+        for candidate in ["#handbook-content", "#mw-content-text > .mw-parser-output", "#docContent", "body > .fancy", "article.markdown-body", ".theme-doc-markdown", ".article-body", "main article", "article", "main", "[role='main']", "body"] {
             let nodes = doc.select(candidate);
             // Multiple articles often indicate an index, so keep looking for its enclosing main.
             if nodes.length() == 1 && !nodes.text().trim().is_empty() {
-                selected = Some((nodes.html().to_string(), candidate.to_owned()));
+                let mut html = nodes.html().to_string();
+                if candidate == "#mw-content-text > .mw-parser-output" {
+                    html = format!("{}\n{html}", doc.select_single("h1#firstHeading").html());
+                }
+                selected = Some((html, candidate.to_owned()));
                 break;
             }
         }
         selected.context("No readable HTML body found; the page may require browser rendering")?
     };
-    let converter = HtmlToMarkdown::builder()
-        .options(Options { bullet_list_marker: BulletListMarker::Dash, ..Default::default() })
-        .skip_tags(vec!["script", "style", "noscript", "template", "svg", "canvas"])
-        .build();
-    let markdown = converter.convert(&fragment).context("HTML to Markdown conversion failed")?;
+    let markdown = tables::convert_fragment(&fragment).context("HTML to Markdown conversion failed")?;
     if markdown.trim().is_empty() { bail!("The page has no extractable content; it may require browser rendering"); }
     Ok(Extraction { markdown: format!("{}\n", markdown.trim()), title, selection })
 }
@@ -292,5 +317,53 @@ mod tests {
         assert!(md.contains("```plain\nContent-Type: <media-type>\n```"));
         assert!(md.contains("```rust\nfn main() {}\n```"));
         assert!(md.contains("The protocol is http."));
+    }
+
+    #[test]
+    fn removes_badges_without_removing_traits_or_compatibility_content() {
+        let html = "<main><h1>Vec</h1><div class='notable-trait-badge-container'><a href='/Write'>Write</a></div>\
+            <details class='baseline-indicator high'><summary>Baseline Widely available</summary><p>This feature is well established</p></details>\
+            <mdn-survey>Survey UI</mdn-survey><h2>Implementations</h2><h3>impl Write for Vec</h3>\
+            <h2 id='browser_compatibility'>Browser compatibility</h2><p>Supported since version 10.</p>\
+            <p>Baseline is a concept in this explanation.</p></main>";
+        let md = html_to_markdown(html, None, None, false).unwrap().markdown;
+        assert!(!md.contains("Widely available") && !md.contains("well established"));
+        assert!(!md.contains("Survey UI"));
+        assert!(!md.contains("[Write]"));
+        assert!(md.contains("impl Write for Vec"));
+        assert!(md.contains("Browser compatibility"));
+        assert!(md.contains("Supported since version 10."));
+        assert!(md.contains("Baseline is a concept in this explanation."));
+    }
+
+    #[test]
+    fn twoslash_lines_preserve_code_and_keep_diagnostics_outside_fence() {
+        let html = "<main><div id='handbook-content'><h1>Everyday Types</h1><article>\
+            <pre class='shiki'><div class='language-id'>ts</div><div class='code-container'><code>\
+            <div class='line'><span>function f() {</span></div><div class='line'>  return 42;</div>\
+            <div class='line'></div><div class='line'>}</div><span class='error'>Type mismatch</span>\
+            <span class='error-behind'>Type mismatch</span></code><a class='playground-link'>Try</a></div></pre>\
+            </article></div></main>";
+        let md = html_to_markdown(html, None, None, false).unwrap().markdown;
+        assert!(md.starts_with("# Everyday Types\n"));
+        assert!(md.contains("```ts\nfunction f() {\n  return 42;\n\n}\n```"), "{md}");
+        assert!(md.contains("> Type mismatch"));
+        assert_eq!(md.matches("Type mismatch").count(), 1);
+        assert!(!md.contains("Try"));
+    }
+
+    #[test]
+    fn known_document_containers_keep_titles_and_exclude_site_menus() {
+        for (html, title, body) in [
+            ("<main><h1 id='firstHeading'>HTTP</h1><div>Language menu</div><div id='mw-content-text'><div class='mw-parser-output'><p>Protocol body</p></div></div></main>", "HTTP", "Protocol body"),
+            ("<div>Language menu</div><div id='docContent'><div class='navheader'>Navigation table</div><h2>Numeric types</h2><p>smallint</p><div class='navfooter'>Next page</div></div>", "Numeric types", "smallint"),
+            ("<div>Language menu</div><div class='fancy'><h1>CREATE TABLE</h1><p>PRIMARY KEY</p></div>", "CREATE TABLE", "PRIMARY KEY"),
+        ] {
+            let md = html_to_markdown(html, None, None, false).unwrap().markdown;
+            assert!(md.contains(title) && md.contains(body), "{md}");
+            assert!(!md.contains("Language menu") && !md.contains("Navigation table") && !md.contains("Next page"));
+            let whole = html_to_markdown(html, None, None, true).unwrap().markdown;
+            assert!(whole.contains("Language menu"));
+        }
     }
 }
